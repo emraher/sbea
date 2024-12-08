@@ -1,0 +1,475 @@
+---
+title: "R ile Etki Analizi"
+subtitle: ""
+author: "[Emrah Er](https://eremrah.com)"
+institute: Ankara Üniversitesi Siyasal Bilgiler Fakültesi
+date: today
+date-format: "D MMMM YYYY"
+bibliography: bib/references.bib
+lang: tr
+format:
+  dime-revealjs:
+    # Output file
+    output-file: sbea3.html
+    # Table of Contents
+    toc: false
+    toc_float: true
+    toc-depth: 1
+    toc-location: body
+    toc-title: "İçindekiler"
+    # Generate a self contained file
+    self-contained: true
+    self-contained-math: true
+    # Turn preview links within the presentation off (all links open in a new tab)
+    preview-links: false
+    # Logo and footer options
+    logo: "logos/sbf_logo.png"
+    footer: ""
+    code-fold: true
+execute: 
+  cache: true    
+  echo: true
+---
+
+```{r Setup}
+#| include: false
+# Add default ggplot theme. This can be overridden by your own theme at
+# the end of the ggplot graph.
+
+
+# Install R libraries
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  dplyr, DT, ggplot2, ggpubr, ggrepel, ggtext, gt, here, huxtable, 
+  knitr, leaflet, osmdata, pacman, pagedown, palmerpenguins,
+  reactable, sf, tidyr, tidyverse, broom, modelsummary
+)
+```
+
+# RDD {background-color="#07202E" background-opacity="0.8"}
+
+
+## 0. Veri
+```{r}
+library(tidyverse)
+library(broom)
+library(rdrobust)
+library(rddensity)
+library(modelsummary)
+
+
+
+tutoring <- read_csv(here::here("data/tutor.csv"),
+                     show_col_types = FALSE)
+
+glimpse(tutoring, width = 70)
+```
+
+
+- `id`: Öğrenci numarası
+- `entrance_exam`: Giriş sınavı skoru
+- `exit_exam`: Bitirme sınavı skoru
+- `tutoring`: Öğrenci özel ders programına dahil mi
+
+
+## 1. Adım
+- Öğrenciler özel ders programına katılabilmek için giriş sınavında 70 puan ve altında puan almalıdır. 
+- 70'in üzerinde puan alan öğrenciler programa alınmazlar. 
+- 70 puanlık net bir kuralımız olduğu için, özel ders programına katılım sürecinin kural tabanlı olduğunu varsayabiliriz.
+- Programın bir kurala göre uygulandığını bildiğimiz için, kuralın ne kadar katı bir şekilde uygulandığını bulmak istiyoruz. 
+
+## 2. Adım
+Programa katılım için sınav skoru eşiği 70 puandı. 68 puan alıp katılmayan veya 73 puan alıp katılan öğrenciler var mı? Grafik ile kontrol edelim.
+
+
+```{r}
+#| echo: false 
+source("_extensions/dime-worldbank/dime/setup_dime_palettes.R")
+source("_extensions/dime-worldbank/dime/setup_ggplot2_dime.R")
+```
+
+```{r}
+ggplot(tutoring, 
+       aes(x = entrance_exam, 
+           y = tutoring, 
+           color = tutoring)) +
+  geom_point(size = 3, 
+             alpha = 0.5,
+             position = position_jitter(width = 0, height = 0.25, seed = 1234)) +
+  geom_vline(xintercept = 70) +
+  labs(x = "Giriş Sınavı Skoru", 
+       y = "",
+       title = "Özel Ders Programına Dahil Mi?") +
+  guides(color = "none")
+```
+
+## 2. Adım
+Bir de tablo ile kontrol edelim.
+
+```{r}
+tutoring %>%
+  group_by(tutoring, entrance_exam <= 70) %>%
+  summarize(count = n())
+```
+
+Sınavdan 70 ve altında alıp da özel ders almayan veya 70 üstü alıp da özel ders alan kimse yok. 
+
+Dolayısıyla katı bir dizayn var.
+
+## 3. Adım
+
+- İlgilendiğimiz değişkende herhangi bir manipülasyon olup olmadığını kontrol edelim. 
+
+- Belki de sınavın nasıl değerlendirildiğine bağlı olarak birçok öğrenci 70 civarında toplanmıştır.
+
+- Öğrenciler programa dahil olabilmek için sınavda kasıtlı olarak başarısız olmuş olabilirler. 
+
+- Bu kontrolü birkaç farklı şekilde yapabiliriz. 
+
+- Önce sınav puanlarının histogramına bakalım ve eşiğin etrafında herhangi bir büyük sıçrama olup olmadığını tespit edelim.
+
+
+## 3. Adım
+```{r}
+ggplot(tutoring, aes(x = entrance_exam, fill = tutoring)) +
+  geom_histogram(binwidth = 2, color = "white", boundary = 70) +
+  geom_vline(xintercept = 70) +
+  labs(x = "Giriş Sınavı Skoru", y = "Sayı", fill = "Programa Dahil Mi?") +
+  theme(legend.position = "bottom")
+```
+
+
+
+## 3. Adım
+- Burada, sınırın etrafında bir sıçrama yok gibi görünüyor. 
+
+- 70 puanlık eşiğin hemen öncesi ve hemen sonrasında çubukların yükseklikleri arasında gözle görülür küçük bir fark var, ancak dağılımın genel şeklini takip ediyor gibi görünüyor. 
+
+- McCrary yoğunluk testi ile bu sıçramanın istatistiksel olarak anlamlı olup olmadığını test edebiliriz. Ayrıntılı açıklaması için [bkz.](https://mixtape.scunning.com/06-regression_discontinuity#mccrarys-density-test). 
+
+- Bu test, verileri bir histogram gibi kutucuklara yerleştirir ve ardından bu kutucukların ortalamalarını ve güven aralıklarını çizer. Yoğunluk çizgilerinin güven aralıkları örtüşmüyorsa, o zaman testin puanlanmasında muhtemelen sistematik olarak yanlış bir şeyler vardır (yani, çok fazla kişinin 69'a karşı 71 alması). 
+
+- Güven aralıkları çakışırsa, eşik değer civarında önemli bir fark yoktur.
+
+
+## 3. Adım
+Testi yapalım.
+```{r}
+test_density <- rddensity(tutoring$entrance_exam, c = 70)
+summary(test_density)
+```
+
+## 3. Adım
+Grafiği çizelim.
+
+```{r}
+plot_density_test <- rdplotdensity(rdd = test_density,
+                                   X = tutoring$entrance_exam,
+                                   type = "both")  # hem noktalar hem çizgiler için
+```
+
+Test sonucunda eşik noktasının her iki tarafındaki iki noktadaki fark için t-testini gösteren "Robust" ile başlayan satır ile ilgileniyoruz.
+
+
+## 3. Adım
+- Grafikte, güven aralıklarının önemli ölçüde örtüştüğüne dikkat edin. 
+- p değeri 0.5809'dur ve bu 0.05'ten çok daha büyüktür, bu nedenle **iki çizgi arasında önemli bir fark olduğuna dair iyi bir kanıtımız yoktur**. 
+- Bu grafiğe ve t istatistiğine dayanarak, herhangi bir manipülasyon veya gruplama olmadığını söyleyebiliriz.
+
+## 3. Adım
+Eşikte fazla gözlem olan bir veri yaratalım ve onu inceleyelim.
+```{r}
+tutoring2 <- tutoring %>% 
+  rbind(tibble(id = 1001:1060,
+               entrance_exam = c(rep(68, 30), rep(69.9, 30)),
+               tutoring = rep(TRUE, 60),
+               tutoring_text = rep("Tutor", 60),
+               exit_exam = rep(100, 60)))
+
+ggplot(tutoring2, aes(x = entrance_exam, fill = tutoring)) +
+  geom_histogram(binwidth = 2, color = "white", boundary = 70) +
+  geom_vline(xintercept = 70) +
+  labs(x = "Giriş Sınavı Skoru", y = "Sayı", fill = "Programa Dahil Mi?") +
+  theme(legend.position = "bottom")
+
+test_density2 <- rddensity(tutoring2$entrance_exam, c = 70)
+summary(test_density2)
+```
+
+## 3. Adım
+```{r}
+plot_density_test2 <- rdplotdensity(rdd = test_density2,
+                                    X = tutoring2$entrance_exam,
+                                    type = "both")  # hem noktalar hem çizgiler için
+```
+
+
+## 4. Adım
+Artık bunun katı bir tasarım olduğunu ve 70 puanlık eşik civarında test puanlarının gruplanmadığını bildiğimize göre, özel ders programına katılıma bağlı olarak nihai puanlarda bir süreksizlik olup olmadığına bakalım. 
+
+```{r}
+ggplot(tutoring, aes(x = entrance_exam, y = exit_exam, color = tutoring)) +
+  geom_point(size = 1, alpha = 0.5) +
+  geom_smooth(data = filter(tutoring, entrance_exam <= 70), method = "lm") +
+  geom_smooth(data = filter(tutoring, entrance_exam > 70), method = "lm") +
+  geom_vline(xintercept = 70) +
+  labs(x = "Giriş Sınavı Skoru", 
+       y = "Bitirme Sınavı Skoru", 
+       color = "") +
+  theme(legend.position = "none")
+```
+
+## 5. Adım
+Bir süreksizlik var ama ne kadar büyük? Ve istatistiksel olarak anlamlı mı?
+
+Süreksizliğin büyüklüğünü iki farklı şekilde kontrol edebiliriz: 
+
+- parametrik (yani belirli parametreler ve katsayılarla `lm()` kullanarak) veya 
+- parametrik olmayan yöntemlerle.
+
+## Parametrik Tahmin
+
+$$
+\text{Bitirme Sınavı Skoru} = \beta_0 + \beta_1 \text{Giriş Sınavı Skoru}_\text{merkezi} + \beta_2 \text{Özel Ders Programı} + \epsilon
+$$
+
+Bu denklemi tahmin edelim. 
+
+- Burada katsayıları daha kolay yorumlamak için giriş sınav skorunu merkezileştirebiliriz. 
+
+- Bu durumda değişken öğrencinin eşik skorun ne kadar altında veya üstünde not aldığını gösterir. 
+
+- Bu sayede de $\beta_2$ katsayısını nedensel etki olarak yorumlayabiliriz.
+
+## Parametrik Tahmin
+```{r}
+tutoring_centered <- tutoring %>%
+  mutate(entrance_centered = entrance_exam - 70)
+
+tutoring_centered %>% 
+  select(id, entrance_exam, entrance_centered) %>% 
+  slice_head(., n = 3)
+
+model_simple <- lm(exit_exam ~ entrance_centered + tutoring,
+                   data = tutoring_centered)
+tidy(model_simple)
+```
+
+## Parametrik Tahmin
+- Burada sabit terim, 70 puan eşiğindeki ortalama bitirme sınavı skorunu gösterir. 
+
+- Örneğin giriş sınavında 70.001 puan alan öğrenciler, bitirme sınavında ortalama 59.4 puan alırlar. Bu katsayı öğrenci 70 almış ve özel ders almamışsa modelin öngördüğü bitirme sınav skorudur.
+
+- $\beta_1$ katsayısı öğrencilerin giriş sınavında aldıkları 70'in üzerindeki her puan için bitirme sınavında 0.51 puan daha fazla puan aldıklarını söyler. 
+
+- $\beta_2$, özel ders programının katsayısıdır ve en çok önemsediğimiz katsayı budur. Bu, özel ders doğru olduğunda sabit terimdeki kayma veya eşikteki puanlar arasındaki farktır. Özel ders programına katılmak, bitirme sınavı puanlarını 10.8 puan artırır.
+
+## Parametrik Tahmin
+- Parametrik bir yöntem kullanmanın bir avantajı da, demografi gibi diğer değişkenleri de modele dahil edebilmemizdir. 
+
+- Burada modeli tüm veriler ile tahmin ediyoruz ama gerçek hayatta en çok eşik civarındaki gözlemler ile ilgileniriz ki bu da aslında tahmin ettiğimiz modelin yanlış olduğu anlamına gelir. 
+
+- Çok yüksek veya çok düşük puanlar, etki boyutumuzu gerçekten etkilememelidir, çünkü yalnızca 70'in biraz altında ve biraz üzerinde puan alan insanları önemsiyoruz.
+
+- Aynı modeli tahmin edebilir, veri setimizi ancak daha küçük bir pencere veya bant genişliği içindeki kişilerle sınırlayabiliriz.
+
+## Parametrik Tahmin
+```{r}
+model_bw_10 <- lm(exit_exam ~ entrance_centered + tutoring,
+                  data = filter(tutoring_centered,
+                                entrance_centered >= -10 &
+                                  entrance_centered <= 10))
+tidy(model_bw_10)
+
+model_bw_5 <- lm(exit_exam ~ entrance_centered + tutoring,
+                 data = filter(tutoring_centered,
+                               entrance_centered >= -5 &
+                                 entrance_centered <= 5))
+tidy(model_bw_5)
+```
+
+
+## Parametrik Tahmin
+Modelleri karşılaştıralım.
+
+```{r}
+modelsummary(list("Full Data" = model_simple,
+                  "Bandwidth = 10" = model_bw_10,
+                  "Bandwidth = 5" = model_bw_5),
+             gof_omit = "Num.Obs.|AIC|BIC|Log.Lik|F|RMSE")
+```
+
+Özel ders programının etkisi, 9.1'den 10.8'e farklılık gösteriyor. Hangisi doğrudur? 
+
+Kesinlikle tüm veriyi kullanan model değil.
+
+## Parametrik Olmayan Tahmin
+- Süreksizliğin boyutunu ölçmek için doğrusal regresyon yerine parametrik olmayan yöntemler de  kullanabiliriz. 
+- Esasen bu, R'ın verilere düz bir çizgi sığdırmaya çalışmadığı, bunun yerine noktaların etrafında kıvrılacağı ve her şeyi olabildiğince yumuşak bir şekilde sığdırmaya çalışacağı anlamına gelir.
+
+
+## Parametrik Olmayan Tahmin
+`rdrobust()` fonksiyonu, parametrik olmayan tahminle eşik noktasındaki boşluğu ölçmeyi kolaylaştırır. 
+
+En basit haliyle tahmin edelim.
+
+```{r}
+rdrobust(y = tutoring$exit_exam, 
+         x = tutoring$entrance_exam, 
+         c = 70) %>%
+  summary()
+```
+
+
+## Parametrik Olmayan Tahmin
+Bu çıktıda bakılması gereken birkaç önemli bilgi vardır:
+
+- En çok önemsediğiniz şey gerçek etki boyutudur. Bu, aşağıdaki tabloda “Conventional” yöntemle gösterilen katsayıdır. Burada -8.578'dir ki bu özel ders programının bitirme sınav skorlarında 8 puanlık bir değişikliğe neden olduğu anlamına gelir. Her iki tahmin türüne göre, bu 8 puanlık artış istatistiksel olarak anlamlıdır (p < 0.001; %95 güven aralığı kesinlikle 0 içermez).
+
+- Daha da önemlisi, buradaki katsayının gerçekte negatif (-8.578) olduğuna dikkat edin, önceki parametrik tahminlerimizin tümü pozitifti. Bu, programın test puanlarında düşüşe neden olduğu anlamına gelmez. Bu negatif değer, `rdrobust()`'un boşluğu nasıl ölçtüğünün sadece bir yan etkisidir. Eşikten hemen önce tedavi grubunun değerine bakar ve ardından kontrol grubuna geçerken test puanlarının düştüğünü gösterir. `rdrobust()` içinde işareti tersine çevirmenin bir yolu yoktur, bu nedenle grafiğe bakmanız ve boşluğun gerçekte ne yaptığını görmeniz gerekir.
+
+
+## Parametrik Olmayan Tahmin
+- Model, 9.969 bant genişliği kullanmış (çıktıda BW est. (h)), bu da yalnızca test puanı 70 $\pm$ 10 olan öğrencilere baktığı anlamına gelir. Fonksiyon bu bant genişliğine otomatik olarak karar verir, ancak bunu istediğimiz gibi değiştirebiliriz.
+
+- Model üçgensel bir [kernel](https://en.wikipedia.org/wiki/Kernel_(statistics)) kullanmıştır. Kernel eşik noktasındaki gözlemlere ne kadar ağırlık verileceğine karar verir. 69.99 veya 70.01 gibi skorlar 70'e son derece yakındır, bu nedenle en fazla ağırlığı onlar alır. 67 veya 73 gibi skorlar biraz daha uzakta olduğundan daha az önemlidirler. 64 veya 76 gibi puanlar daha da az önemlidir, bu yüzden daha da az ağırlık alılar, vs. Farklı kerneller kullanmak da mümkündür. 
+
+## Parametrik Olmayan Tahmin
+Bu parametrik olmayan modelin grafiğini `rdplot()` ile çizebiliriz.
+
+```{r}
+rdplot(y = tutoring$exit_exam, 
+       x = tutoring$entrance_exam, 
+       c = 70,
+       x.label = "Running variable", 
+       y.label = "Outcome variable")
+```
+
+## Parametrik Olmayan Tahmin
+Buradaki noktaların aslında veri kümesindeki gözlemler olmadığına dikkat edin. `rdplot()` foksiyonu, veri için kutucuklar oluşturur (histogram gibi) ve ardından her bir kutu içindeki ortalama sonucu gösterir. `rdplot()` içindeki `nbins` veya `binselect` argümanlarıyla x ekseninde kaç kutunun kullanıldığını kontrol edebiliriz.
+
+Varsayılan olarak, `rdrobust()` bant genişliği boyutunu otomatik olarak seçer. Bu bant genişliğinin ne olduğunu görmek için `rdbwselect()`'i kullanabilir ve `all = TRUE` argümanını ekleyerek, bir grup farklı algoritmaya dayalı potansiyel bant genişliklerini görebiliriz:
+
+## Parametrik Olmayan Tahmin
+```{r}
+# ?rdbwselect
+rdbwselect(y = tutoring$exit_exam, 
+           x = tutoring$entrance_exam, 
+           c = 70) %>%
+  summary()
+```
+
+## Parametrik Olmayan Tahmin
+```{r}
+rdbwselect(y = tutoring$exit_exam, 
+           x = tutoring$entrance_exam, 
+           c = 70, 
+           all = TRUE) %>%
+  summary()
+```
+
+
+
+## Parametrik Olmayan Tahmin
+- Duyarlılık analizinizin bir parçası olarak farklı bant genişliklerini deneyerek etki büyüklüğünün önemli ölçüde değişip değişmediğine bakabiliriz.
+
+- Duyarlılık analizine yönelik diğer bir yaygın yaklaşım da ideal bant genişliğini, idealin iki katı ve idealin yarısı olarak kullanmak ve tahminin önemli ölçüde değişip değişmediğini görmektir. 
+
+- Kendi seçtiğiniz bant genişliğinizi belirtmek için h argümanını kullanabilirsiniz.
+
+## Parametrik Olmayan Tahmin
+```{r}
+rdrobust(y = tutoring$exit_exam, 
+         x = tutoring$entrance_exam, 
+         c = 70, 
+         h = 9.969) %>%
+  summary()
+```
+
+## Parametrik Olmayan Tahmin
+```{r}
+rdrobust(y = tutoring$exit_exam, 
+         x = tutoring$entrance_exam, 
+         c = 70, 
+         h = 9.969 * 2) %>%
+  summary()
+```
+
+## Parametrik Olmayan Tahmin
+```{r}
+rdrobust(y = tutoring$exit_exam, 
+         x = tutoring$entrance_exam, 
+         c = 70, 
+         h = 9.969 / 2) %>%
+  summary()
+```
+
+## Parametrik Olmayan Tahmin
+- Aynı zamanda kerneli de ayarlayabiliriz. 
+
+- Varsayılan olarak `rd_robust`, 
+  - üçgen bir kernel kullanır (daha uzak gözlemler doğrusal olarak daha az ağırlığa sahiptir), 
+  - ancak kerneli Epanechnikov (daha uzaktaki gözlemler bir eğriden sonra daha az ağırlığa sahiptir) veya 
+  -  tekdüze (daha uzak gözlemler daha yakın gözlemlerle aynı ağırlığa sahiptir; bu ağırlıklandırılmamıştır) olarak değiştirebiliriz.
+
+## Parametrik Olmayan Tahmin
+```{r}
+rdrobust(y = tutoring$exit_exam, 
+         x = tutoring$entrance_exam,
+         c = 70, 
+         kernel = "triangular") %>%
+  summary()
+```
+
+## Parametrik Olmayan Tahmin
+```{r}
+rdrobust(y = tutoring$exit_exam, 
+         x = tutoring$entrance_exam,
+         c = 70, 
+         kernel = "epanechnikov") %>%
+  summary()
+```
+
+## Parametrik Olmayan Tahmin
+```{r}
+rdrobust(y = tutoring$exit_exam, 
+         x = tutoring$entrance_exam,
+         c = 70, 
+         kernel = "uniform") %>%
+  summary()
+```
+
+Hangisi en iyi? En iyiyi söylemek çok zor. 
+
+Önemli olan tek şey, etkinin boyutunun ve yönünün değişmemesidir. 
+
+Etki hala olumlu ve hala 8-9 puan aralığında.
+
+## 6. Adım
+- Yukarıda farklı farklı etki büyüklükleri tahmin ettik. 
+
+- Gerçek hayatta genellikle bunlardan birini rapor ederiz, ancak bulgularımızın ne kadar güvenilir ve sağlam olduğunu kontrol etmek için farklı parametrik ve parametrik olmayan modelleri tahmin ederiz. 
+
+- Yukarıdaki tahminlerimizi bir araya getirirsek
+
+## 6. Adım
+|       Metod        | Bant Genişliği |             Kernel             | Tahmin |
+| :----------------: | :------------: | :----------------------------: | :----: |
+|     Parametrik     |   Full data    |      Ağırlıklandırılmamış      |  10.8  |
+|     Parametrik     |       10       |      Ağırlıklandırılmamış      | 9.273  |
+|     Parametrik     |       5        |      Ağırlıklandırılmamış      | 9.122  |
+| Parametrik Olmayan |     9.969      |            Üçgensel            | 8.578  |
+| Parametrik Olmayan |     19.938     |            Üçgensel            | 9.151  |
+| Parametrik Olmayan |     4.984      |            Üçgensel            | 8.201  |
+| Parametrik Olmayan |     8.201      |          Epanechnikov          | 8.389  |
+| Parametrik Olmayan |     7.346      | Tekdüze (Ağırlıklandırılmamış) | 8.175  |
+
+## 6. Adım
+Gerçek hayatta, muhtemelen en basit olanı bildirmek mantıklıdır (4. satır: parametrik olmayan, otomatik bant genişliği, üçgensel kernel), ancak etkinin farklı model özelliklerine göre ne kadar değiştiğini bilmek de faydalı olacaktır.
+
+## 6. Adım
+RDD ile alakalı bazı ileri düzey kaynaklar:
+
+- [Regression discontinuity design](https://cran.r-project.org/web/views/Econometrics.html#regression-discontinuity-design)
+- [RD Packages](https://rdpackages.github.io/)
+- [ContinuousRD](https://www.kylebutts.com/open-source/continuousrd/)

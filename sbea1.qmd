@@ -1,0 +1,312 @@
+---
+title: "R ile Etki Analizi"
+subtitle: ""
+author: "[Emrah Er](https://eremrah.com)"
+institute: Ankara Üniversitesi Siyasal Bilgiler Fakültesi
+date: today
+date-format: "D MMMM YYYY"
+bibliography: bib/template.bib
+lang: tr
+format:
+  dime-revealjs:
+    # Output file
+    output-file: sbea1.html
+    # Table of Contents
+    toc: false
+    toc_float: false
+    toc-depth: 1
+    toc-location: body
+    toc-title: "İçindekiler"
+    # Generate a self contained file
+    self-contained: true
+    self-contained-math: true
+    # Turn preview links within the presentation off (all links open in a new tab)
+    preview-links: false
+    # Logo and footer options
+    logo: "logos/sbf_logo.png"
+    footer: ""
+execute: 
+  cache: false    
+  echo: true
+---
+
+```{r Setup}
+#| include: false
+# Add default ggplot theme. This can be overridden by your own theme at
+# the end of the ggplot graph.
+
+
+# Install R libraries
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  dplyr, DT, ggplot2, ggpubr, ggrepel, ggtext, gt, here, huxtable, 
+  knitr, leaflet, osmdata, pacman, pagedown, palmerpenguins,
+  reactable, sf, tidyr, tidyverse, broom, modelsummary
+)
+```
+
+# Regresyon {background-color="#07202E" background-opacity="0.8"}
+
+## Regresyon
+
+-   SAT skorları ABD'de üniversiteye girişte önemli bir faktördür. SAT sınavında iyi not alan öğrecilerin üniversite ortalamalarının da iyi olduğu varsayılmaktadır.
+
+-   ABD'de bir üniversitede kabul ofisinde çalıştığımızı ve SAT skorlarının öğrencinin okul performansının iyi bir tahmin edicisi olup olmadığını merak ettiğimizi varsayalım.
+
+-   SAT skoru yanında bazı diğer faktörlerin de performansı etkileyip etkilemediğini görmek istediğimizi düşünelim.
+
+## Regresyon
+
+`sat_gpa.csv` veri setinde 6 farklı değişken yer almaktadır.
+
+-   `sex`: öğrencinin cinsiyeti
+-   `sat_verbal`: SAT sınavının sözel kısmında öğrencinin yüzdelik skoru
+-   `sat_math`: SAT sınavının sayısal kısmında öğrencinin yüzdelik skoru
+-   `sat_total`: `sat_verbal` + `sat_math`
+-   `gpa_hs`: Öğrencinin lise mezuniyet not ortalaması
+-   `gpa_fy`: Öğrencinin üniversite birinci sınıf not ortalaması
+
+```{r}
+sat_gpa <- read_csv(here("data/sat_gpa.csv"), 
+                    show_col_types = FALSE)
+```
+
+# Temel Keşif Soruları
+
+## SAT puanları birinci sınıf ortalaması ile ne kadar ilişkilidir?
+
+```{r}
+cor(sat_gpa$gpa_fy, sat_gpa$sat_total)
+```
+
+SAT puanları ve birinci sınıf üniversite not ortalaması orta düzeyde pozitif korelasyona sahiptir (r = 0.46). Biri yükseldikçe diğeri de yükselme eğilimindedir.
+
+## SAT puanları birinci sınıf ortalaması ile ne kadar ilişkilidir?
+
+```{r}
+#| echo: false 
+source("_extensions/dime-worldbank/dime/setup_dime_palettes.R")
+source("_extensions/dime-worldbank/dime/setup_ggplot2_dime.R")
+```
+
+```{r}
+#| echo: false 
+ggplot(sat_gpa, aes(x = sat_total, y = gpa_fy)) +
+  geom_point(size = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Toplam SAT skoru", 
+       y = "Birinci Sınıf Ortalaması")
+```
+
+## Lise ortalaması birinci sınıf ortalaması ile ne kadar ilişkilidir?
+
+```{r}
+cor(sat_gpa$gpa_fy, sat_gpa$gpa_hs)
+```
+
+Lise ve birinci sınıf ortalamaları da orta derecede ilişkilidir (r = 0.54), ancak biraz daha güçlü bir ilişki vardır.
+
+## Lise ortalaması birinci sınıf ortalaması ile ne kadar ilişkilidir?
+
+```{r}
+#| echo: false 
+ggplot(sat_gpa, aes(x = gpa_hs, y = gpa_fy)) +
+  geom_point(size = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Lise Ortalaması", 
+       y = "Birinci Sınıf Ortalaması")
+```
+
+## SAT puanları ile birinci sınıf not ortalaması arasındaki korelasyon erkekler için mi yoksa kadınlar için mi daha güçlü?
+
+```{r}
+sat_gpa %>%
+  group_by(sex) %>%
+  summarize(correlation = cor(sat_total, gpa_fy))
+```
+
+Herhangi bir fark olup olmadığını görmek için her iki cinsiyet için SAT puanları ile birinci sınıf not ortalaması arasındaki ilişkiyi hesaplayabiliriz. Korelasyon kadınlar için biraz daha güçlü, ancak pek fark edilmiyor (kadınlar için r = 0.49, erkekler için r = 0.48)
+
+## SAT puanları ile birinci sınıf not ortalaması arasındaki korelasyon erkekler için mi yoksa kadınlar için mi daha güçlü?
+
+```{r}
+#| echo: false 
+ggplot(sat_gpa, aes(x = gpa_hs, y = gpa_fy, color = sex)) +
+  geom_point(size = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Lise Ortalaması", y = "Birinci Sınıf Ortalaması") 
+```
+
+## Lise not ortalaması ile birinci sınıf not ortalaması arasındaki korelasyon erkekler için mi yoksa kadınlar için mi daha güçlü?
+
+```{r}
+sat_gpa %>%
+  group_by(sex) %>%
+  summarize(correlation = cor(gpa_hs, gpa_fy))
+```
+
+# Modeller {background-color="#07202E" background-opacity="0.8"}
+
+## SAT puanları birinci sınıf ortalamalarını tahmin ediyor mu?
+
+```{r}
+model_sat_gpa <- lm(gpa_fy ~ sat_total, 
+                    data = sat_gpa)
+
+tidy(model_sat_gpa, conf.int = TRUE)
+```
+
+## SAT puanları birinci sınıf ortalamalarını tahmin ediyor mu?
+
+Sabit terim 0.002'dir, bu da toplam SAT yüzdelik puanı 0 olduğunda ortalama birinci sınıf ortalamasının 0.002 olacağı anlamına gelir. Eğim 0.024'tür; bu, SAT puanındaki yüzde 1'lik bir artışın ortalama olarak not ortalamasında 0.024 puanlık bir artışla ilişkili olduğu anlamına gelir.
+
+Modelin $R^2$ değerine bakalım.
+
+```{r}
+glance(model_sat_gpa) %>% select(1:2)
+```
+
+$R^2$ 0.212'dir, yani SAT puanları birinci sınıf not ortalamasındaki değişimin %21'ini açıklıyor.
+
+## Belirli bir SAT puanı türünün birinci sınıf ortalamaları üzerinde daha büyük bir etkisi var mı?
+
+`sat_total` değişkeni hem `sat_math` hem de `sat_verbal`'ı içerir.
+
+Aşağıdaki modeli kullanarak, sınavın her bir bölümünün birinci sınıf not ortalaması üzerindeki etkisini görmek için toplam puanı ayrıştırabiliriz:
+
+$$
+\texttt{gpa_fy} = \beta_0 + \beta_1 \texttt{sat_verbal} + \beta_2 \texttt{sat_math} + \varepsilon
+$$
+
+## Belirli bir SAT puanı türünün birinci sınıf ortalamaları üzerinde daha büyük bir etkisi var mı?
+
+```{r}
+model_sat_gpa_types <- lm(gpa_fy ~ sat_verbal + sat_math, 
+                          data = sat_gpa)
+
+tidy(model_sat_gpa_types, conf.int = TRUE)
+```
+
+## Belirli bir SAT puanı türünün birinci sınıf ortalamaları üzerinde daha büyük bir etkisi var mı?
+
+Yine, hiçbir öğrenci için hem sözel hem de matematik testi sıfır olmadığı için sabit terim anlamsızdır.
+
+sat_verbal için eğim 0.025'tir, dolayısıyla sözel SAT'deki bir puanlık artış, matematik puanları sabit iken, ortalama olarak not ortalamasındaki 0.025 puanlık bir artışla ilişkilidir.
+
+Bu arada, matematik SAT'deki bir puanlık artış, sözel puanları sabit iken, ortalama olarak not ortalamasındaki 0.022 puanlık bir artışla ilişkilidir.
+
+İki katsayı da yaklaşık olarak aynıdır, bu nedenle ilk bakışta, sınav türünün üniversite not ortalamaları üzerinde önemli bir etkisi yok gibi görünmektedir.
+
+## Belirli bir SAT puanı türünün birinci sınıf ortalamaları üzerinde daha büyük bir etkisi var mı?
+
+```{r}
+glance(model_sat_gpa_types) %>% select(1:2)
+```
+
+Ayarlanmış $R^2$ (birden fazla açıklayıcı değişken kullandığımız için bakmamız gereken $R^2$) 0.211'dir, bu da bu modelin üniversite not ortalamasındaki değişimin %21'ini açıkladığı anlamına gelir.
+
+## Lise ortalaması birinci sınıf ortalamalarını tahmin ediyor mu?
+
+Aşağıdaki modeli kullanarak birinci sınıf not ortalamasını tahmin etmek için lise not ortalamasını da kullanabiliriz:
+
+$$
+\texttt{gpa_fy} = \beta_0 + \beta_1 \texttt{gpa_hs} + \varepsilon
+$$
+
+## Lise ortalaması birinci sınıf ortalamalarını tahmin ediyor mu?
+
+```{r}
+model_sat_gpa_hs <- lm(gpa_fy ~ gpa_hs, 
+                       data = sat_gpa)
+
+tidy(model_sat_gpa_hs)
+```
+
+## Lise ortalaması birinci sınıf ortalamalarını tahmin ediyor mu?
+
+Buradaki sabit terim 0.091'dir, bu da lise not ortalaması sıfır olan bir öğrencinin tahmini birinci sınıf not ortalamasının ortalama olarak 0.091 olacağı anlamına gelir.
+
+Not ortalamasındaki her 1 puanlık artış için (yani 2.0'dan 3.0'a veya 3.0'dan 4.0'a geçiş), üniversite not ortalamasında ortalama 0.743 puanlık bir artış vardır.
+
+```{r}
+glance(model_sat_gpa_hs) %>% select(1:2)
+```
+
+$R^2$ 0.295'tir, bu da üniversite not ortalamasındaki değişimin yaklaşık %30'unun lise not ortalaması ile açıklanabileceği anlamına gelir.
+
+## Cinsiyet ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+$$
+\texttt{gpa_fy} = \beta_0 + \beta_1 \texttt{sat_total} + \beta_s \texttt{sex} + \varepsilon
+$$
+
+## Cinsiyet ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+```{r}
+model_sat_sex <- lm(gpa_fy ~ sat_total + sex, 
+                    data = sat_gpa)
+
+tidy(model_sat_sex, conf.int = TRUE)
+```
+
+## Cinsiyet ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+```{r}
+model_sat_sex2 <- lm(gpa_fy ~ sat_total + sex - 1, 
+                     data = sat_gpa)
+
+tidy(model_sat_sex2, conf.int = TRUE)
+```
+
+## Cinsiyet ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+Burada işler ilginçleşiyor. Sabit terim yine saçmadır. SAT'tan 0 puan alan kadınların ortalamada üniversite not ortalaması -0.027 olacaktır.
+
+`sat_total`ın, cinsiyet kontrol edildiğinde, pozitif bir etkisi vardır. SAT puanlarındaki bir puanlık artış, ortalama olarak birinci sınıf not ortalamasında 0.026 puanlık bir artışla ilişkilidir.
+
+SAT puanlarını kontrol edersek, erkeklerde üniversite not ortalamalarında ortalama 0.274 puanlık bir düşüş görülür.
+
+## Cinsiyet ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+```{r}
+glance(model_sat_sex) %>% select(1:2)
+```
+
+Bu iki değişkenin birleşimi modelin açıklama gücünü çok fazla artırmaz. Düzeltilmiş $R^2$ 0.243'tür, yani model üniversite not ortalamalarındaki değişimin %24'ünden biraz fazlasını açıklar.
+
+## Cinsiyet, Lise ortalaması ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+$$
+gpa_{fy} = \beta_0 + \beta_1 sat_{total} + \beta_1 gpa_{hs} + \beta_s {sex} + \varepsilon
+$$
+
+```{r}
+model_sat_hs_sex <- lm(gpa_fy ~ sat_total + gpa_hs + sex, 
+                       data = sat_gpa)
+
+tidy(model_sat_hs_sex, conf.int = TRUE)
+```
+
+## Cinsiyet, Lise ortalaması ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+Yine sabit terimi gözardı edebiliriz.
+
+`sat_total`'ın katsayısı, lise not ortalaması ve cinsiyet dikkate alındığında, bir öğrencinin SAT puanındaki puanlık bir artışın, üniversite not ortalamasında ortalama 0.016 puanlık bir artışla ilişkili olduğunu gösterir.
+
+SAT puanları ve cinsiyet kontrol edildiğinde, lise not ortalamasındaki bir puanlık artış, üniversite not ortalamasındaki ortalama 0.545 puanlık bir artışla ilişkilidir. Bu katsayı daha önce bulduğumuz 0.74 puanlık katsayıdan daha düşüktür. Bunun nedeni, SAT puanlarının ve cinsiyetin lise ortalamasının açıklama gücünün bir kısmını emmiş olmasıdır.
+
+## Cinsiyet, Lise ortalaması ve SAT skoru birinci sınıf ortalamalarını tahmin ediyor mu?
+
+SAT puanları ve lise ortalamaları dikkate alındığında, erkeklerin üniversitede ortalama olarak 0.143 puan daha düşük ortalaması vardır.
+
+```{r}
+glance(model_sat_hs_sex) %>% select(1:2)
+```
+
+Model, üniversite ortalamasındaki değişimin %36.5'ini açıklıyor; bu, önceki modellerin açıklama gücünden daha yüksek.
+
+
+## Hangi model birinci sınıf not ortalamasını en iyi tahmin eder? 
+
+Düzeltilmiş $R^2$ genellikle bir modelin uyumunun gücünü veya modelin sonuç değişkeninin gelecekteki değerlerini ne kadar iyi tahmin edeceğini gösterir. Her model için düzeltilmiş $R^2$'yi karşılaştırırsak, "en iyi" modelin sonuncusu olduğunu görürüz.
+

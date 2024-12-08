@@ -1,0 +1,524 @@
+---
+title: "R ile Etki Analizi"
+subtitle: ""
+author: "[Emrah Er](https://eremrah.com)"
+institute: Ankara Üniversitesi Siyasal Bilgiler Fakültesi
+date: today
+date-format: "D MMMM YYYY"
+bibliography: bib/references.bib
+lang: tr
+format:
+  dime-revealjs:
+    # Output file
+    output-file: sbea2.html
+    # Table of Contents
+    toc: false
+    toc_float: true
+    toc-depth: 1
+    toc-location: body
+    toc-title: "İçindekiler"
+    # Generate a self contained file
+    self-contained: true
+    self-contained-math: true
+    # Turn preview links within the presentation off (all links open in a new tab)
+    preview-links: false
+    # Logo and footer options
+    logo: "logos/sbf_logo.png"
+    footer: ""
+    code-fold: true
+execute: 
+  cache: true    
+  echo: true
+---
+
+```{r Setup}
+#| include: false
+# Add default ggplot theme. This can be overridden by your own theme at
+# the end of the ggplot graph.
+
+
+# Install R libraries
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  dplyr, DT, ggplot2, ggpubr, ggrepel, ggtext, gt, here, huxtable, 
+  knitr, leaflet, osmdata, pacman, pagedown, palmerpenguins,
+  reactable, sf, tidyr, tidyverse, broom, modelsummary
+)
+```
+
+# DiD {background-color="#07202E" background-opacity="0.8"}
+
+## DiD
+DiD genellikle tedavi edilen kişi üzerindeki tedavi etkisini (maruz kalandaki nedensel etki) tahmin etmek için kullanılır, ancak daha güçlü varsayımlar yapılarak Ortalama Tedavi Etkisini (ATE) veya popülasyondaki nedensel etkiyi de tahmin edebilir.
+
+Herhangi bir nedensel etkiyi tahmin etmek için üç varsayımın geçerli olması gerekir: 
+
+1. **Değiştirilebilirlik (Exchangeability)**: Değiştirilebilirlik, bir gruptaki (A) bireyler diğer gruptakilere (B) verilen tedaviyi almış olsaydı, A grubundaki sonuç olasılığının B grubundaki sonuç olasılığıyla aynı olacağı anlamına gelir.
+
+2. **Pozitiflik (Positivity)**: Nedensel etkileri yalnızca önemsediğimiz tüm maruz kalma seviyelerine uygun olan kişilerde değerlendirdiğimiz anlamına gelir.
+
+3. **Kararlı Birim Tedavi Değer Varsayımı (SUTVA)**: (1) Herhangi bir birim için potansiyel sonuçlar, diğer birimlere atanan tedavilerle değişmez. ve (2) Her birim için, her tedavi seviyesinin farklı potansiyel sonuçlara yol açan farklı biçimleri veya versiyonları yoktur.
+
+## DiD
+DiD tahmini ayrıca şunları gerektirir:
+
+- Başlangıçtaki sonuçla ilgisi olmayan müdahale (müdahalenin tahsisi sonuca göre belirlenmemeli)
+- Tedavi/müdahale ve kontrol gruplarının sonucunda **Paralel Eğilimler** vardır
+- Müdahale ve karşılaştırma gruplarının bileşimi, tekrarlanan kesitsel tasarım için kararlıdır (SUTVA'nın bir parçası)
+- Taşma (spillover) etkisi yoktur (SUTVA'nın bir parçası)
+
+
+## DiD
+Paralel eğilim varsayımı, DiD modellerinin dahili geçerliliğini sağlamak için yukarıdaki dört varsayım arasında en kritik olanıdır ve yerine getirilmesi en zor olanıdır. 
+
+Tedavi olmadığında, 'tedavi' ve 'kontrol' grubu arasındaki farkın zaman içinde sabit olmasını gerektirir. 
+
+Bu varsayım için istatistiksel bir test olmamasına rağmen, birçok zaman noktasında gözlemleriniz olduğunda görsel inceleme yararlıdır. 
+
+## DiD
+Ayrıca, test edilen süre ne kadar küçük olursa, varsayımın tutma olasılığının o kadar yüksek olduğu öne sürülmüştür. 
+
+Paralel eğilim varsayımının ihlali, nedensel etkinin yanlı tahminine yol açacaktır.
+
+Birimler genellikle farklı zamanlarda tedavi görürlerse bu da tahminleri sapmalı yapabilir. 
+
+
+## Veri
+
+Wooldridge'teki `injury` verisini kullanalım.
+
+* `durat` (`duration` olarak yeniden adlandıracağız): Hafta cinsinden ölçülen işsizlik yardımlarının süresi
+
+* `ldurat` (`log_duration` olarak yeniden adlandıracağız): `durat`ın logaritması (`log(durat)`)
+
+* `after_1980` (`after_1980` olarak yeniden adlandıracağız): Gözlemin 1980'deki politika değişikliğinden önce (0) veya sonra (1) olup olmadığını gösteren gösterge değişkeni. Bu bizim **zaman** (veya önce/sonra) değişkenimiz
+
+* `highearn`: Gözlemin düşük (0) veya yüksek (1) ücret kazanan olup olmadığını gösteren gösterge değişkeni. Bu bizim **grup** (veya tedavi/kontrol) değişkenimiz
+
+## Veri
+```{r}
+library(tidyverse)
+library(here)
+library(broom)
+library(scales)
+library(modelsummary)
+
+# ?wooldridge::injury
+data(injury, package = "wooldridge")
+
+injury <- injury %>%
+  filter(ky == 1) %>% # Sadece kentucky verisine bakalim
+  rename(duration = durat, 
+         log_duration = ldurat,
+         after_1980 = afchnge)
+```
+
+
+## Keşifsel veri analizi
+
+İşsizlik yardımlarının yüksek ve düşük ücret kazananlar arasında dağılımına (kontrol ve tedavi gruplarımız) bakalım.
+
+```{r}
+#| echo: false 
+source("_extensions/dime-worldbank/dime/setup_dime_palettes.R")
+source("_extensions/dime-worldbank/dime/setup_ggplot2_dime.R")
+```
+
+```{r}
+injury %>% 
+  ggplot(aes(x = duration)) +
+  geom_histogram(binwidth = 8, color = "white", boundary = 0) +
+  facet_wrap(~highearn)
+```
+
+
+Dağılımlar çarpık.
+
+## Keşifsel veri analizi
+
+```{r}
+injury %>% 
+  group_by(highearn) %>% 
+  summarytools::descr(duration, stats = "fivenum")
+```
+
+
+## Keşifsel veri analizi
+Her iki gruptaki çoğu insan 0-8 hafta arasında yardım alırken, bazıları 180 haftadan (3.5 yıl) fazla yardım alıyor
+
+`log_duration` kullanırsak, regresyon modelleriyle daha iyi çalışan daha az çarpık bir dağılım elde edebiliriz:
+
+## Keşifsel veri analizi
+```{r}
+injury %>% 
+  ggplot(aes(x = log_duration)) +
+  geom_histogram(binwidth = 0.75, color = "white", boundary = 0) +
+  scale_x_continuous(labels = trans_format("exp", format = round)) +
+  facet_wrap(~highearn)
+```
+
+## Keşifsel veri analizi
+Politika değişikliğinden önce ve sonra işsizliğin dağılımını da kontrol edelim. 
+
+```{r}
+injury %>% 
+  ggplot(aes(x = log_duration)) +
+  geom_histogram(binwidth = 0.75, color = "white", boundary = 0) +
+  scale_x_continuous(labels = trans_format("exp", format = round)) +
+  facet_wrap(~after_1980)
+```
+
+
+## Keşifsel veri analizi
+Histogramlara bakarak öncesi/sonrası ve tedavi/kontrol grupları arasında gerçekten farklı bir şey göremiyoruz. Grupların ortalama grafiğini çizelim.
+
+```{r}
+# Grafik icin veri yaratalim.
+plot_data <- injury %>%
+  mutate(highearn = factor(highearn, 
+                           labels = c("Düşük Ücret\nAlanlar", "Yüksek Ücret\nAlanlar")),
+         after_1980 = factor(after_1980, 
+                             labels = c("1980 Öncesi", "1980 Sonrası"))) %>%
+  group_by(highearn, after_1980) %>%
+  summarize(mean_duration = mean(log_duration),
+            se_duration = sd(log_duration) / sqrt(n()),
+            upper = mean_duration + (1.96 * se_duration),
+            lower = mean_duration + (-1.96 * se_duration))
+
+# Grafigi cizelim.
+plot_data %>% 
+  ggplot(aes(x = highearn, 
+             y = mean_duration)) +
+  geom_pointrange(aes(ymin = lower, 
+                      ymax = upper),
+                  color = "purple", 
+                  size = 2,
+                  linewidth = 2) +
+  facet_wrap(~after_1980) + 
+  labs(x = "", y = "", title = "Ortalama Log(İşsizlik Süresi)")
+```
+
+## Keşifsel veri analizi
+DiD analizlerinde gördüğümüz grafiklere benzetelim.
+
+```{r}
+plot_data %>% 
+  ggplot(aes(x = after_1980, 
+             y = mean_duration,
+             color = highearn)) +
+  geom_pointrange(aes(ymin = lower, 
+                      ymax = upper),
+                  size = 2,
+                  linewidth = 2) +
+  geom_line(aes(group = highearn), 
+            linewidth = 1, 
+            linetype = "dashed") +
+  labs(x = "", 
+       y = "", 
+       title = "Ortalama Log(İşsizlik Süresi)",
+       color = "") +
+  scale_y_continuous(breaks = seq(0, 1.8, 0.1))
+  
+```
+
+## El ile DiD
+
+
+Bu tablodaki değerleri hesaplayarak DiD yapabiliriz.
+
+|                  | 1980 Öncesi | 1980 Sonrası |         Fark          |
+| :--------------: | :---------: | :----------: | :-------------------: |
+| **Düşük Ücret**  |    **A**    |    **B**     |        **B-A**        |
+| **Yüksek Ücret** |    **C**    |    **D**     |        **D-C**        |
+|     **Fark**     |   **C-A**   |   **D-B**    | **(D − C) − (B − A)** |
+
+
+## El ile DiD
+```{r}
+diffs <- injury %>%
+  group_by(after_1980, highearn) %>%
+  summarize(mean_duration = mean(log_duration),
+            mean_duration_for_humans = mean(duration))
+diffs
+
+```
+
+## El ile DiD
+
+Değerleri çekip farkları hesaplayalım.
+
+```{r}
+before_treatment <- diffs %>%
+  filter(after_1980 == 0, highearn == 1) %>%
+  pull(mean_duration)
+
+before_control <- diffs %>%
+  filter(after_1980 == 0, highearn == 0) %>%
+  pull(mean_duration)
+
+after_treatment <- diffs %>%
+  filter(after_1980 == 1, highearn == 1) %>%
+  pull(mean_duration)
+
+after_control <- diffs %>%
+  filter(after_1980 == 1, highearn == 0) %>%
+  pull(mean_duration)
+
+diff_treatment_before_after <- after_treatment - before_treatment
+diff_treatment_before_after
+
+diff_control_before_after <- after_control - before_control
+diff_control_before_after
+
+diff_diff <- diff_treatment_before_after - diff_control_before_after
+diff_diff
+```
+
+## El ile DiD
+DiD tahmini 0.19'dur, bu da programın işsizlik süresinde 0.19 log haftalık bir artışa neden olduğu anlamına gelir. Log hafta yerine yüzdelerle yorumlarsak tedavi görmek (politika değişikliğinden sonra yüksek ücret kazanan olmak) işsizlik süresinin %19 artmasına neden olmaktadır. 
+
+
+```{r}
+#| echo: false 
+source("_extensions/dime-worldbank/dime/setup_dime_palettes.R")
+source("_extensions/dime-worldbank/dime/setup_ggplot2_dime.R")
+```
+
+```{r}
+diffs %>% 
+  ggplot(aes(x = as.factor(after_1980),
+             y = mean_duration,
+             color = as.factor(highearn))) +
+  geom_point(size = 3) +
+  geom_line(aes(group = as.factor(highearn)),
+            linewidth = 2) +
+  annotate(geom = "segment", 
+           x = "0", xend = "1",
+           y = before_treatment, yend = after_treatment - diff_diff,
+           linetype = "dashed", color = "grey50") +
+  annotate(geom = "segment", 
+           x = "1", xend = "1",
+           y = after_treatment, yend = after_treatment - diff_diff,
+           linetype = "dotted", color = "blue") +
+  annotate(geom = "label", 
+           x = "1", y = after_treatment - (diff_diff / 2),
+           label = "Program effect", size = 3) +
+  labs(x = "", 
+       y = "", 
+       color = "") + 
+  scale_y_continuous(breaks = seq(0, 1.8, 0.1))
+```
+
+
+## Regresyon ile DiD
+
+$$
+y_{it} = \beta_0 + \beta_1 Treat_i + \beta_2 Post_t + \beta_3 Treat_i Post_t + \epsilon_{it}
+$$
+
+Bu klasik 2x2 veya TWFE modeli şu şekilde ifade edilebilir.
+
+|               | Tedavi = 0             | Tedavi = 1                                  | *Fark*                  |
+| :------------ | :--------------------- | :------------------------------------------ | :---------------------- |
+| **Sonra = 0** | $$ \beta_0 $$          | $$ \beta_0 + \beta_1 $$                     | $$ \beta_1 $$           |
+| **Sonra = 1** | $$\beta_0 + \beta_2 $$ | $$ \beta_0 + \beta_1 + \beta_2 + \beta_3 $$ | $$ \beta_1 + \beta_3 $$ |
+| Fark          | $$ \beta_2 $$          | $$ \beta_2 + \beta_3 $$                     | $$ \beta_3 $$           |
+
+
+## Regresyon ile DiD
+Bizim örneğimizde bu denklem şu şekildedir.
+
+$$
+\begin{aligned}
+\log(\text{duration}) = &\alpha + \beta \ \text{highearn} + \gamma \ \text{after_1980} + \delta \ (\text{highearn} \times \text{after_1980}) + \epsilon
+\end{aligned}
+$$
+
+denklemindeki $\delta$ katsayısı ilgilendiğimiz katsayıdır.
+
+## Regresyon ile DiD
+```{r}
+model_small <- lm(log_duration ~ highearn + after_1980 + highearn * after_1980,
+                  data = injury)
+
+summary(model_small)
+```
+
+## Regresyon ile DiD
+```{r}
+tidy(model_small)
+```
+
+Regresyon kullanmanın bir avantajı, etkiyi izole etmeye yardımcı olması için kontrol değişkenlerini dahil edebilmemizdir. Örneğin, cinsiyet, medeni durum ve yaş gibi işçi demografisini kontrol etmek isteyebiliriz.
+
+## Regresyon ile DiD
+```{r}
+injury_fixed <- injury %>%
+  mutate(indust = as.factor(indust),
+         injtype = as.factor(injtype))
+
+model_big <- lm(log_duration ~ highearn + after_1980 + highearn * after_1980 +
+                  male + married + age + hosp + indust + injtype + lprewage,
+                data = injury_fixed)
+
+diff_diff_controls <- tidy(model_big) %>%
+  filter(term == "highearn:after_1980") %>%
+  pull(estimate)
+
+tidy(model_big)[c(1:3, 18),]
+```
+
+## Regresyon ile DiD
+Bir dizi demografik kontrolü dahil ettikten sonra, DiD tahmini küçülür (0.17). Bu da politikanın bir işyeri yaralanmasının ardından haftalarca işsiz kalma süresinde %17'lik bir artışa neden olduğunu gösterir.
+
+## Regresyon ile DiD
+
+
+```{r}
+modelsummary(list("Basit" = model_small, "Geniş" = model_big),
+             coef_omit = c(-1:-4),
+             gof_omit = "Num.Obs.|R2|R2 Adj.|AIC|BIC|Log.Lik|F|RMSE")
+```
+
+Tahmin daha küçüktür, çünkü artık diğer bağımsız değişkenler `log_duration`'daki bazı varyasyonları açıklamaktadır.
+
+
+
+## Regresyon ile DiD 2
+$$
+y_{it} = \beta_0 + \beta_1 Treat_i + \beta_2 Post_t + \beta_3 Treat_i Post_t + \epsilon_{it}
+$$
+
+
+şeklindeki denklemimizi genelleştirelim. Denklem 2'den fazla grup ve 2'den fazla zaman için genelleştirildiğinde TWFE model olarak adlandırılan modele dönüşür.
+
+TWFE modeli genel olarak şu şekilde yazılır.
+
+$$
+Y_{it} = \alpha_i + \lambda_t + \tau W_{it} + \beta X_{it} + \epsilon_{it}
+$$
+
+## Regresyon ile DiD 2
+burada 
+
+-   $Y_{it}$ sonuç
+
+-   $\alpha_i$ birim sabit etkisi
+
+-   $\lambda_t$ zaman sabit etkisi
+
+-   $\tau$ tedavinin nedensel etkisi
+
+-   $W_{it}$ tedavi kuklası
+
+-   $X_{it}$ diğer değişkenler
+
+şeklindedir. $T = 2$, olduğunda TWFE klasik DiD modeli haline gelir.
+
+## Regresyon ile DiD 2
+Kanonik/standart TWFE yalnızca şu durumlarda çalışır:
+
+* Etkiler, birimler arasında ve zaman dilimleri arasında homojendir (yani, tedavinin etkilerinde dinamik değişiklik yoktur).
+* 2 zaman periyodu vardır.
+
+TWFE'yi çoklu gruplara ve çoklu periyotlara uygularken, sözde nedensel katsayı, bazı ağırlıkların negatif olabileceği verilerdeki tüm iki grup/iki periyot DiD tahmincilerinin ağırlıklı ortalamasıdır. 
+
+Daha spesifik olarak ağırlıklar, panelin ortasındaki birimlerin en yüksek ağırlığa sahip olduğu her bir çiftteki grup boyutları ve tedavi göstergesinin değişimi ile orantılıdır.
+
+## Regresyon ile DiD 2
+Son yıllarda gelişen DiD literatürünün merkezinde, klasik İki Yönlü Sabit Etkiler (TWFE) modelinin yanlış tahminler verebileceği öncülü yer alır. TWFE'nin eksiklikleri ve bazı çözüm yolları için aşağıda yer alan bazı çalışmalara/linklere bakabilirsiniz:
+
+- [CRAN Task View: Causal Inference](https://cran.r-project.org/web/views/CausalInference.html)
+- Goodman-Bacon Ayrıştırması [@goodman-bacon2021]. [`bacondecomp` paketi](https://cran.r-project.org/web/packages/bacondecomp/index.html).
+- Otokorelasyon ve kümelemeyi hesaba katabilen bir bootstrap prosedürü ile 2 adımlı tahmin [@callaway2021]. [`did` paketi](https://bcallaway11.github.io/did/articles/multi-period-did.html#two-way-fixed-effects-regressions).
+- Olay çalışması bağlamında @callaway2021'in bir versiyonu olan [@sun2021]. [`fixest` paketi](https://lrberge.github.io/fixest/).
+- @callaway2021'den farklı olarak birimlerin tedaviye girip çıkmasına izin veren [@imai2020; @imai2021]. [`wfe`](https://github.com/insongkim/wfe) ve [`PanelMatch`](https://github.com/insongkim/PanelMatch) paketleri.
+- [`DRDID` paketi](https://psantanna.com/DRDID/)
+
+
+
+## did
+Paketin temelinde (grup X zaman) etkileşimleri yer alır. 
+
+Pakette yer alan fonksiyonlar
+
+- İkiden fazla zaman dilimi
+- Tedavi zamanlamasında değişiklik (yani birimler, zamanın farklı noktalarında tedavi edilebilir)
+- Tedavi etkisi heterojenliği (yani, tedaviye katılmanın etkisi birimler arasında değişiklik gösterebilir ve yine tedaviye katılmanın etkisi birimler arasında potansiyel olarak karmaşık dinamikler, tedaviye yönelik seçim veya zaman etkileri sergileyebilir)
+- Paralel eğilimler varsayımı, yalnızca ortak değişkenler üzerinde şartlandırma yapıldıktan sonra geçerlidir.
+
+gibi durumlarda tahmine imkan tanır.
+     
+## did
+Burada temel fikir etkileşimlerin her birini geçerli bir kontrol grubuna (varsayılan olarak, hiç tedavi edilmemiş birimler) göre tahmin etmek ve böylece bireysel ortalama tedavi etkileri (ATT'ler) elde etmektir. 
+
+Daha sonra, ilgilenilen "özet" sonuçları elde etmek için bu bireysel ATT'leri farklı boyutlarda toplayabiliriz. 
+
+Örneğin, eşdeğer olay etüdü katsayılarını elde etmek için dinamik olarak (yani zaman periyotları boyunca) toplayabiliriz.
+
+## did
+[DiD için tipik tahmin, iki ardışık fonksiyon çağrısını içerir](https://bcallaway11.github.io/did/reference/index.html).
+
+- `agg_gt()`: Bireysel (grup x zaman) ATT'leri tahmin edin.
+
+- `aggte()`: ATT'leri ilgilenilen boyut boyunca toplar. Örneğin, göreli zaman boyutu boyunca ATT'leri toplamak ve böylece bir olay çalışması elde etmek için `aggte(..., type = "dynamic")` kullanabiliriz.
+
+## did
+```{r}
+library(did)
+data(mpdta)
+glimpse(mpdta, width = 70)
+```
+
+Farklı eyaletlere farklı yıllarda tedavi uygulanmış.
+
+## did
+```{r}
+mpdta %>% 
+  filter(treat == 1) %>% 
+  select(countyreal, first.treat) %>% 
+  group_by(countyreal) %>% 
+  filter(row_number() == 1) %>% 
+  group_by(first.treat) %>% 
+  filter(row_number() == 1) %>% 
+  arrange(first.treat)
+```
+
+## did
+Bireysel (grup x zaman) ATT'leri tahmin edelim.
+
+```{r}
+out <- att_gt(yname = "lemp",
+              tname = "year",
+              idname = "countyreal",
+              gname = "first.treat",
+              xformla = NULL,
+              data = mpdta)
+
+out
+```
+
+## did
+Sonuçları farklı şekillerde [toplulaştırabiliriz.](https://bcallaway11.github.io/did/reference/aggte.html)
+
+```{r}
+aggte(out, type = "simple")
+```
+
+
+## Okuma Önerileri
+
+Notları hazırlarken aşağıda yer alan kaynaklardan da faydalandım. Ayrıntılı olarak inceleyebilirsiniz.
+
+- [A Guide on Data Analysis](https://bookdown.org/mike/data_analysis/difference-in-differences.html)
+- [Literature on Recent Advances in Applied Micro Methods](https://christinecai.github.io/PublicGoods/applied_micro_methods.pdf)
+- [Causal Inference The Mixtape](https://mixtape.scunning.com/)
+- [The Effect: An Introduction to Research Design and Causality](https://theeffectbook.net/)
+- [DiD](https://asjadnaqvi.github.io/DiD/)
+- [Statistical Tools for Causal Inference](https://chabefer.github.io/STCI/)
+- [Causal Inference for The Brave and True](https://matheusfacure.github.io/python-causality-handbook/landing-page.html)
+- [Experiments and Quasi-Experiments](https://www.econometrics-with-r.org/13-eaqe.html)
+- [Machine Learning-based Causal Inference Tutorial](https://bookdown.org/stanfordgsbsilab/ml-ci-tutorial/)
+- [Applied Causal Analysis (with R)](https://bookdown.org/paul/applied-causal-analysis/)
+
+# Kaynakça
